@@ -7,13 +7,13 @@ RUN apk add --no-cache bash curl nginx php82 php82-ctype php82-curl php82-dom ph
 
 RUN rm -rf /var/cache/apk/* /tmp/*
 
-COPY config/nginx.conf /etc/nginx/nginx.conf
+COPY conf/nginx.conf /etc/nginx/nginx.conf
 
 ENV PHP_INI_DIR=/etc/php82
 
-COPY config/fpm-pool.conf /etc/php82/php-fpm.d/www.conf
-COPY config/php.ini /etc/php82/conf.d/custom.ini
-COPY config/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY conf/fpm-pool.conf /etc/php82/php-fpm.d/www.conf
+COPY conf/php.ini /etc/php82/conf.d/custom.ini
+COPY conf/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 RUN mkdir -p /usr/src && wget --no-cache https://github.com/netcccyun/dnsmgr/archive/refs/heads/main.zip -O /usr/src/www.zip && unzip /usr/src/www.zip -d /usr/src/ && mv /usr/src/dnsmgr-main /usr/src/www && rm -f /usr/src/www.zip
 
