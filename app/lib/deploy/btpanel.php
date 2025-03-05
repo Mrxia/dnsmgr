@@ -46,13 +46,24 @@ class btpanel implements DeployInterface
         foreach ($sites as $site) {
             $siteName = trim($site);
             if (empty($siteName)) continue;
-            try {
-                $this->deploySite($siteName, $fullchain, $privatekey);
-                $this->log("网站 {$siteName} 证书部署成功");
-                $success++;
-            } catch (Exception $e) {
-                $errmsg = $e->getMessage();
-                $this->log("网站 {$siteName} 证书部署失败：" . $errmsg);
+            if ($config['type'] == '2') {
+                try {
+                    $this->deployMailSys($siteName, $fullchain, $privatekey);
+                    $this->log("邮局域名 {$siteName} 证书部署成功");
+                    $success++;
+                } catch (Exception $e) {
+                    $errmsg = $e->getMessage();
+                    $this->log("邮局域名 {$siteName} 证书部署失败：" . $errmsg);
+                }
+            } else {
+                try {
+                    $this->deploySite($siteName, $fullchain, $privatekey);
+                    $this->log("网站 {$siteName} 证书部署成功");
+                    $success++;
+                } catch (Exception $e) {
+                    $errmsg = $e->getMessage();
+                    $this->log("网站 {$siteName} 证书部署失败：" . $errmsg);
+                }
             }
         }
         if ($success == 0) {
@@ -78,17 +89,17 @@ class btpanel implements DeployInterface
         }
     }
 
-    private function deploySite($siteName, $fullchain, $privatekey)
+    private function deploySite($siteName， $fullchain， $privatekey)
     {
         $path = '/site?action=SetSSL';
         $data = [
-            'type' => '0',
-            'siteName' => $siteName,
-            'key' => $privatekey,
-            'csr' => $fullchain,
+            'type' => '0'，
+            'siteName' => $siteName，
+            'key' => $privatekey，
+            'csr' => $fullchain，
         ];
-        $response = $this->request($path, $data);
-        $result = json_decode($response, true);
+        $response = $this->request($path， $data);
+        $result = json_decode($response， true);
         if (isset($result['status']) && $result['status']) {
             return true;
         } elseif (isset($result['msg'])) {
@@ -98,7 +109,27 @@ class btpanel implements DeployInterface
         }
     }
 
-    public function setLogger($func)
+    private function deployMailSys($domain， $fullchain， $privatekey)
+    {
+        $path = '/plugin?action=a&name=mail_sys&s=set_mail_certificate_multiple';
+        $data = [
+            'domain' => $domain，
+            'key' => $privatekey，
+            'csr' => $fullchain，
+            'act' => 'add'，
+        ];
+        $response = $this->request($path， $data);
+        $result = json_decode($response， true);
+        if (isset($result['status']) && $result['status']) {
+            return true;
+        } elseif (isset($result['msg'])) {
+            throw new Exception($result['msg']);
+        } else {
+            throw new Exception($response ? $response : '返回数据解析失败');
+        }
+    }
+
+    公共 function setLogger($func)
     {
         $this->logger = $func;
     }
@@ -106,21 +137,21 @@ class btpanel implements DeployInterface
     private function log($txt)
     {
         if ($this->logger) {
-            call_user_func($this->logger, $txt);
+            call_user_func($this->logger， $txt);
         }
     }
 
-    private function request($path, $params)
+    private function request($path， $params)
     {
-        $url = $this->url . $path;
+        $url = $this->url 。 $path;
 
         $now_time = time();
         $post_data = [
-            'request_token' => md5($now_time . md5($this->key)),
+            'request_token' => md5($now_time 。 md5($this->key))，
             'request_time' => $now_time
         ];
-        $post_data = array_merge($post_data, $params);
-        $response = curl_client($url, $post_data, null, null, null, $this->proxy);
+        $post_data = array_merge($post_data， $params);
+        $response = curl_client($url， $post_data， null， null， null， $this->proxy);
         return $response['body'];
     }
 }
