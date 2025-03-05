@@ -1,60 +1,94 @@
-name: Multi-arch Docker Build
+name: Versioned Multi-arch Build
 
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
+    paths-ignore: 
+      - 'VERSION'  # 防止版本文件更新触发循环构建
 
 env:
   REGISTRY: docker.io
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/dnsmgr
+  VERSION_FILE: VERSION  # 版本存储文件
 
 jobs:
-  build-push:
+  version-manager:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.version-update.outputs.new_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 读取并递增版本号
+      - name: Increment version
+        id: version-update
+        run: |
+          # 初始化版本文件（若不存在）
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo "2.4" > $VERSION_FILE
+          fi
+          
+          current_version=$(cat $VERSION_FILE)
+          major=$(echo $current_version | cut -d '.' -f1)
+          minor=$(echo $current_version | cut -d '.' -f2)
+          new_minor=$((minor + 1))
+          new_version="${major}.${new_minor}"
+          
+          echo "旧版本: $current_version → 新版本: $new_version"
+          echo $new_version > $VERSION_FILE
+          
+          # 输出新版本供后续步骤使用
+          echo "new_version=$new_version" >> $GITHUB_OUTPUT
+
+      # 提交版本更新（使用[skip ci]避免循环触发）
+      - name: Commit version change
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add $VERSION_FILE
+          git commit -m "ci: Auto-increment version to ${{ steps.version-update.outputs.new_version }} [skip ci]"
+          git push origin HEAD:main
+
+  docker-build:
+    needs: version-manager
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
 
     steps:
-      # 代码检出
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # 多架构构建前置条件
+      # 多架构支持配置
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
-          platforms: arm64,amd64  # 启用ARM和AMD架构支持[3]
+          platforms: arm64,amd64
 
-      # 配置Buildx构建器
-      - name: Set up Docker Buildx
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
-          install: true
 
-      # Docker Hub认证（关键修正点）
+      # Docker Hub认证
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 多架构构建与推送
+      # 多标签构建推送
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64  # 指定目标架构[3]
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:v2.4
-          no-cache: true  # 彻底禁用构建缓存[5]
-          secrets: |
-            "dockerhub_username=${{ secrets.DOCKERHUB_USERNAME }}"
-            "dockerhub_token=${{ secrets.DOCKERHUB_TOKEN }}"
-            
+            ${{ env.IMAGE_NAME }}:v${{ needs.version-manager.outputs.new_version }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.version-manager.outputs.new_version }}
+          no-cache: true
