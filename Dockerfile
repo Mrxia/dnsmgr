@@ -1,4 +1,4 @@
-FROM alpine:3.19.6
+FROM alpine:3.19.7
 
 # 设置工作目录
 WORKDIR /app/www
@@ -23,9 +23,9 @@ RUN composer install -d /usr/src/www --no-interaction --no-dev --optimize-autolo
 
 RUN adduser -D -s /sbin/nologin -g www www && chown -R www.www /usr/src/www /var/lib/nginx /var/log/nginx
 
-RUN echo "*/15 * * * * cd /app/www && /usr/bin/php82 think opiptask" | crontab -u www -
+RUN echo "*/15 * * * * cd /app/www && php think opiptask" | crontab -u www -
+RUN echo "* * * * * cd /app/www && php think certtask" | crontab -u www -
 
-RUN echo "* * * * * cd /app/www && /usr/bin/php82 think certtask" | crontab -u www -
 
 COPY config/run_tasks.sh /app/run_tasks.sh
 
@@ -33,10 +33,10 @@ RUN chmod +x /app/run_tasks.sh
 
 COPY entrypoint.sh /entrypoint.sh
 
-ENTRYPOINT ["sh", "/entrypoint.sh"]
+ENTRYPOINT ["sh"， "/entrypoint.sh"]
 
 EXPOSE 80/tcp
 
-CMD ["/bin/sh", "-c", "/usr/sbin/crond && /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf"]
+CMD ["/bin/sh"， "-c"， "/usr/sbin/crond && /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf"]
 
 HEALTHCHECK CMD curl --silent --fail http://127.0.0.1/fpm-ping || exit 1
