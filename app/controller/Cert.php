@@ -203,6 +203,7 @@ class Cert extends BaseController
         $domain = $this->request->post('domain', null, 'trim');
         $id = input('post.id');
         $type = input('post.type', null, 'trim');
+        $status = input('post.status', null, 'trim');
         $offset = input('post.offset/d');
         $limit = input('post.limit/d');
 
@@ -215,6 +216,17 @@ class Cert extends BaseController
         }
         if (!empty($type)) {
             $select->where('B.type', $type);
+        }
+        if (!isNullOrEmpty($status)) {
+            if ($status == '5') {
+                $select->where('A.status', '<', 0);
+            } elseif ($status == '6') {
+                $select->where('A.expiretime', '<', date('Y-m-d H:i:s', time() + 86400 * 7))->where('A.expiretime', '>=', date('Y-m-d H:i:s'));
+            } elseif ($status == '7') {
+                $select->where('A.expiretime', '<', date('Y-m-d H:i:s'));
+            } else {
+                $select->where('A.status', $status);
+            }
         }
         $total = $select->count();
         $rows = $select->fieldRaw('A.*,B.type,B.remark aremark')->order('id', 'desc')->limit($offset, $limit)->select();
@@ -272,7 +284,7 @@ class Cert extends BaseController
             foreach($domains as $domain){
                 $domainList[] = [
                     'oid' => $id,
-                    'domain' => $domain,
+                    'domain' => convertDomainToAscii($domain),
                     'sort' => $i++,
                 ];
             }
@@ -310,7 +322,7 @@ class Cert extends BaseController
             foreach($domains as $domain){
                 $domainList[] = [
                     'oid' => $id,
-                    'domain' => $domain,
+                    'domain' => convertDomainToAscii($domain),
                     'sort' => $i++,
                 ];
             }
@@ -441,7 +453,8 @@ class Cert extends BaseController
         }
 
         foreach($domains as $domain){
-            if(!$wildcard && strpos($domain, '*') !== false) return ['code' => -1, 'msg' => '该证书账户类型不支持泛域名'];
+            if (!$wildcard && strpos($domain, '*') !== false) return ['code' => -1, 'msg' => '该证书账户类型不支持泛域名'];
+            if (preg_match('/[\x{4e00}-\x{9fa5}]/u', $domain) && !function_exists('idn_to_ascii')) return ['code' => -1, 'msg' => '域名包含中文，请开启intl扩展'];
             $mainDomain = getMainDomain($domain);
             $drow = Db::name('domain')->where('name', $mainDomain)->find();
             if (!$drow) {
@@ -477,7 +490,7 @@ class Cert extends BaseController
                 return json(['code' => 0, 'msg' => '添加DNS记录成功！请等待DNS生效后点击验证']);
             }
         }catch(Exception $e){
-            return json(['code' => -1, 'msg' => $e->getMessage()]);
+            return json(['code' => -1, 'msg' => $e->getMessage(), 'trace' => $e->getTrace()]);
         }
     }
 
@@ -540,6 +553,7 @@ class Cert extends BaseController
         $domain = $this->request->post('domain', null, 'trim');
         $oid = input('post.oid');
         $type = input('post.type', null, 'trim');
+        $status = input('post.status', null, 'trim');
         $remark = input('post.remark', null, 'trim');
         $offset = input('post.offset/d');
         $limit = input('post.limit/d');
@@ -553,6 +567,9 @@ class Cert extends BaseController
         }
         if (!empty($type)) {
             $select->where('B.type', $type);
+        }
+        if (!isNullOrEmpty($status)) {
+            $select->where('A.status', $status);
         }
         if (!empty($remark)) {
             $select->where('A.remark', $remark);
@@ -651,7 +668,7 @@ class Cert extends BaseController
             $service->process(true);
             return json(['code' => 0, 'msg' => 'SSL证书部署任务执行成功！']);
         }catch(Exception $e){
-            return json(['code' => -1, 'msg' => $e->getMessage()]);
+            return json(['code' => -1, 'msg' => $e->getMessage(), 'trace' => $e->getTrace()]);
         }
     }
 
@@ -748,73 +765,73 @@ class Cert extends BaseController
                 'addtime' => date('Y-m-d H:i:s'),
                 'status' => 0
             ];
-            if (empty($data['domain']) || empty($data['rr']) || empty($data['did'])) return json(['code' => -1, 'msg' => '必填参数不能为空']);
-            if (!checkDomain($data['domain'])) return json(['code' => -1, 'msg' => '域名格式不正确']);
-            if (Db::name('cert_cname')->where('domain', $data['domain'])->find()) {
-                return json(['code' => -1, 'msg' => '域名'.$data['domain'].'已存在']);
+            if (empty($data['domain']) || empty($data['rr']) || empty($data['did'])) return json(['code' => -1， 'msg' => '必填参数不能为空']);
+            if (!checkDomain($data['domain'])) return json(['code' => -1， 'msg' => '域名格式不正确']);
+            if (Db::name('cert_cname')->where('domain'， $data['domain'])->find()) {
+                return json(['code' => -1， 'msg' => '域名'。$data['domain']。'已存在']);
             }
-            if (Db::name('cert_cname')->where('rr', $data['rr'])->where('did', $data['did'])->find()) {
-                return json(['code' => -1, 'msg' => '已存在相同CNAME记录值']);
+            if (Db::name('cert_cname')->where('rr'， $data['rr'])->where('did'， $data['did'])->find()) {
+                return json(['code' => -1， 'msg' => '已存在相同CNAME记录值']);
             }
             Db::name('cert_cname')->insert($data);
-            return json(['code' => 0, 'msg' => '添加CMAME代理成功！']);
+            return json(['code' => 0， 'msg' => '添加CMAME代理成功！']);
         } elseif ($action == 'edit') {
             $id = input('post.id/d');
-            $row = Db::name('cert_cname')->where('id', $id)->find();
-            if (!$row) return json(['code' => -1, 'msg' => 'CMAME代理不存在']);
+            $row = Db::name('cert_cname')->where('id'， $id)->find();
+            if (!$row) return json(['code' => -1， 'msg' => 'CMAME代理不存在']);
             
             $data = [
-                'rr' => input('post.rr', null, 'trim'),
-                'did' => input('post.did/d'),
+                'rr' => input('post.rr'， null， 'trim')，
+                'did' => input('post.did/d')，
             ];
             if ($row['rr'] != $data['rr'] || $row['did'] != $data['did']) {
                 $data['status'] = 0;
             }
-            if (empty($data['rr']) || empty($data['did'])) return json(['code' => -1, 'msg' => '必填参数不能为空']);
-            if (Db::name('cert_cname')->where('rr', $data['rr'])->where('did', $data['did'])->where('id', '<>', $id)->find()) {
-                return json(['code' => -1, 'msg' => '已存在相同CNAME记录值']);
+            if (empty($data['rr']) || empty($data['did'])) return json(['code' => -1， 'msg' => '必填参数不能为空']);
+            if (Db::name('cert_cname')->where('rr'， $data['rr'])->where('did'， $data['did'])->where('id'， '<>'， $id)->find()) {
+                return json(['code' => -1， 'msg' => '已存在相同CNAME记录值']);
             }
-            Db::name('cert_cname')->where('id', $id)->update($data);
-            return json(['code' => 0, 'msg' => '修改CMAME代理成功！']);
+            Db::name('cert_cname')->where('id'， $id)->update($data);
+            return json(['code' => 0， 'msg' => '修改CMAME代理成功！']);
         } elseif ($action == 'del') {
             $id = input('post.id/d');
-            Db::name('cert_cname')->where('id', $id)->delete();
+            Db::name('cert_cname')->where('id'， $id)->delete();
             return json(['code' => 0]);
         } elseif ($action == 'check') {
             $id = input('post.id/d');
-            $row = Db::name('cert_cname')->alias('A')->join('domain B', 'A.did = B.id')->where('A.id', $id)->field('A.*,B.name cnamedomain')->find();
-            if (!$row) return json(['code' => -1, 'msg' => '自动部署任务不存在']);
+            $row = Db::name('cert_cname')->alias('A')->join('domain B'， 'A.did = B.id')->where('A.id'， $id)->field('A.*,B.name cnamedomain')->find();
+            if (!$row) return json(['code' => -1， 'msg' => '自动部署任务不存在']);
 
             $status = 1;
-            $domain = '_acme-challenge.' . $row['domain'];
-            $record = $row['rr'] . '.' . $row['cnamedomain'];
-            $result = \app\utils\DnsQueryUtils::get_dns_records($domain, 'CNAME');
-            if(!$result || !in_array($record, $result)){
-                $result = \app\utils\DnsQueryUtils::query_dns_doh($domain, 'CNAME');
-                if(!$result || !in_array($record, $result)){
+            $domain = '_acme-challenge.' 。 $row['domain'];
+            $record = $row['rr'] 。 '.' 。 $row['cnamedomain'];
+            $result = \app\utils\DnsQueryUtils::get_dns_records($domain， 'CNAME');
+            if(!$result || !in_array($record， $result)){
+                $result = \app\utils\DnsQueryUtils::query_dns_doh($domain， 'CNAME');
+                if(!$result || !in_array($record， $result)){
                     $status = 0;
                 }
             }
             if($status != $row['status']){
-                Db::name('cert_cname')->where('id', $id)->update(['status' => $status]);
+                Db::name('cert_cname')->where('id'， $id)->update(['status' => $status]);
             }
-            return json(['code' => 0, 'status' => $status]);
+            return json(['code' => 0， 'status' => $status]);
         }
     }
 
-    public function certset()
+    公共 function certset()
     {
-        if (!checkPermission(2)) return $this->alert('error', '无权限');
+        if (!checkPermission(2)) return $this->alert('error'， '无权限');
         if ($this->request->isPost()) {
             $params = input('post.');
             foreach ($params as $key => $value) {
                 if (empty($key)) {
                     continue;
                 }
-                config_set($key, $value);
+                config_set($key， $value);
                 Cache::delete('configs');
             }
-            return json(['code' => 0, 'msg' => 'succ']);
+            return json(['code' => 0， 'msg' => 'succ']);
         }
         return View::fetch();
     }
