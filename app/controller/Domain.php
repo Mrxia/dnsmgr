@@ -5,789 +5,249 @@ namespace app\controller;
 use app\BaseController;
 use think\facade\Db;
 use think\facade\View;
-use think\facade\Request;
-use app\lib\DnsHelper;
-use Exception;
+use think\facade\Cache;
 
-class Domain extends BaseController
+class Dmonitor extends BaseController
 {
-
-    public function account()
+    public function overview()
     {
         if (!checkPermission(2)) return $this->alert('error', '无权限');
-        View::assign('dnsconfig', DnsHelper::$dns_config);
-        return view();
+        $switch_count = Db::name('dmlog')->where('date', '>=', date("Y-m-d H:i:s", strtotime("-1 days")))->count();
+        $fail_count = Db::name('dmlog')->where('date', '>=', date("Y-m-d H:i:s", strtotime("-1 days")))->where('action', 1)->count();
+
+        $run_time = config_get('run_time', null, true);
+        $run_state = $run_time ? (time() - strtotime($run_time) > 10 ? 0 : 1) : 0;
+        View::assign('info', [
+            'run_count' => config_get('run_count', null, true) ?? 0,
+            'run_time' => $run_time ?? '无',
+            'run_state' => $run_state,
+            'run_error' => config_get('run_error', null, true),
+            'switch_count' => $switch_count,
+            'fail_count' => $fail_count,
+            'swoole' => extension_loaded('swoole') ? '<font color="green">已安装</font>' : '<font color="red">未安装</font>',
+        ]);
+        return View::fetch();
     }
 
-    public function account_data()
+    public function task()
+    {
+        if (!checkPermission(2)) return $this->alert('error', '无权限');
+        return View::fetch();
+    }
+
+    public function task_data()
     {
         if (!checkPermission(2)) return json(['total' => 0, 'rows' => []]);
-        $kw = $this->request->post('kw', null, 'trim');
+        $type = input('post.type/d', 1);
+        $kw = input('post.kw', null, 'trim');
         $offset = input('post.offset/d');
         $limit = input('post.limit/d');
 
-        $select = Db::name('account');
+        $select = Db::name('dmtask')->alias('A')->join('domain B', 'A.did = B.id');
         if (!empty($kw)) {
-            $select->whereLike('ak|remark', '%' . $kw . '%');
+            if ($type == 1) {
+                $select->whereLike('rr|B.name', '%' . $kw . '%');
+            } elseif ($type == 2) {
+                $select->where('recordid', $kw);
+            } elseif ($type == 3) {
+                $select->where('main_value', $kw);
+            } elseif ($type == 4) {
+                $select->where('backup_value', $kw);
+            } elseif ($type == 5) {
+                $select->whereLike('remark', '%' . $kw . '%');
+            }
         }
         $total = $select->count();
-        $rows = $select->order('id', 'desc')->limit($offset, $limit)->select();
+        $list = $select->order('A.id', 'desc')->limit($offset, $limit)->field('A.*,B.name domain')->select()->toArray();
 
-        $list = [];
-        foreach ($rows as $row) {
-            $row['typename'] = DnsHelper::$dns_config[$row['type']]['name'];
-            $list[] = $row;
+        foreach ($list as &$row) {
+            $row['checktimestr'] = date('Y-m-d H:i:s', $row['checktime']);
         }
 
         return json(['total' => $total, 'rows' => $list]);
     }
 
-    public function account_op()
+    public function taskform()
     {
         if (!checkPermission(2)) return $this->alert('error', '无权限');
-        $act = input('param.act');
-        if ($act == 'get') {
-            $id = input('post.id/d');
-            $row = Db::name('account')->where('id', $id)->find();
-            if (!$row) return json(['code' => -1, 'msg' => '域名账户不存在']);
-            return json(['code' => 0, 'data' => $row]);
-        } elseif ($act == 'add') {
-            $type = input('post.type');
-            $ak = input('post.ak', null, 'trim');
-            $sk = input('post.sk', null, 'trim');
-            $ext = input('post.ext', null, 'trim');
-            $remark = input('post.remark', null, 'trim');
-            $proxy = input('post.proxy/d', 0);
-            if (empty($ak) || empty($sk)) return json(['code' => -1, 'msg' => 'AccessKey和SecretKey不能为空']);
-            if (Db::name('account')->where('type', $type)->where('ak', $ak)->find()) {
-                return json(['code' => -1, 'msg' => '域名账户已存在']);
-            }
-            Db::startTrans();
-            $id = Db::name('account')->insertGetId([
-                'type' => $type,
-                'ak' => $ak,
-                'sk' => $sk,
-                'ext' => $ext,
-                'proxy' => $proxy,
-                'remark' => $remark,
-                'addtime' => date('Y-m-d H:i:s'),
-            ]);
-            $dns = DnsHelper::getModel($id);
-            if ($dns) {
-                if ($dns->check()) {
-                    Db::commit();
-                    return json(['code' => 0, 'msg' => '添加域名账户成功！']);
-                } else {
-                    Db::rollback();
-                    return json(['code' => -1, 'msg' => '验证域名账户失败，' . $dns->getError()]);
-                }
-            } else {
-                Db::rollback();
-                return json(['code' => -1, 'msg' => 'DNS模块(' . $type . ')不存在']);
-            }
-        } elseif ($act == 'edit') {
-            $id = input('post.id/d');
-            $row = Db::name('account')->where('id', $id)->find();
-            if (!$row) return json(['code' => -1, 'msg' => '域名账户不存在']);
-            $type = input('post.type');
-            $ak = input('post.ak', null, 'trim');
-            $sk = input('post.sk', null, 'trim');
-            $ext = input('post.ext', null, 'trim');
-            $remark = input('post.remark', null, 'trim');
-            $proxy = input('post.proxy/d', 0);
-            if (empty($ak) || empty($sk)) return json(['code' => -1, 'msg' => 'AccessKey和SecretKey不能为空']);
-            if (Db::name('account')->where('type', $type)->where('ak', $ak)->where('id', '<>', $id)->find()) {
-                return json(['code' => -1, 'msg' => '域名账户已存在']);
-            }
-            Db::startTrans();
-            Db::name('account')->where('id', $id)->update([
-                'type' => $type,
-                'ak' => $ak,
-                'sk' => $sk,
-                'ext' => $ext,
-                'proxy' => $proxy,
-                'remark' => $remark,
-            ]);
-            $dns = DnsHelper::getModel($id);
-            if ($dns) {
-                if ($dns->check()) {
-                    Db::commit();
-                    return json(['code' => 0, 'msg' => '修改域名账户成功！']);
-                } else {
-                    Db::rollback();
-                    return json(['code' => -1, 'msg' => '验证域名账户失败，' . $dns->getError()]);
-                }
-            } else {
-                Db::rollback();
-                return json(['code' => -1, 'msg' => 'DNS模块(' . $type . ')不存在']);
-            }
-        } elseif ($act == 'del') {
-            $id = input('post.id/d');
-            $dcount = DB::name('domain')->where('aid', $id)->count();
-            if ($dcount > 0) return json(['code' => -1, 'msg' => '该域名账户下存在域名，无法删除']);
-            Db::name('account')->where('id', $id)->delete();
-            return json(['code' => 0]);
-        }
-        return json(['code' => -3]);
-    }
-
-
-    public function domain()
-    {
-        if (request()->user['type'] == 'domain') {
-            return redirect('/record/' . request()->user['id']);
-        }
-        $list = Db::name('account')->select();
-        $accounts = [];
-        $types = [];
-        foreach ($list as $row) {
-            $accounts[$row['id']] = $row['id'] . '_' . DnsHelper::$dns_config[$row['type']]['name'];
-            if (!array_key_exists($row['type'], $types)) {
-                $types[$row['type']] = DnsHelper::$dns_config[$row['type']]['name'];
-            }
-            if (!empty($row['remark'])) {
-                $accounts[$row['id']] .= '（' . $row['remark'] . '）';
-            }
-        }
-        View::assign('accounts', $accounts);
-        View::assign('types', $types);
-        return view();
-    }
-
-    public function domain_add()
-    {
-        if (!checkPermission(2)) return $this->alert('error', '无权限');
-        $list = Db::name('account')->select();
-        $accounts = [];
-        $types = [];
-        foreach ($list as $row) {
-            $accounts[$row['id']] = $row['id'] . '_' . DnsHelper::$dns_config[$row['type']]['name'];
-            if (!array_key_exists($row['type'], $types)) {
-                $types[$row['type']] = DnsHelper::$dns_config[$row['type']]['name'];
-            }
-            if (!empty($row['remark'])) {
-                $accounts[$row['id']] .= '（' . $row['remark'] . '）';
-            }
-        }
-        View::assign('accounts', $accounts);
-        View::assign('types', $types);
-        return view();
-    }
-
-    public function domain_data()
-    {
-        if (!checkPermission(1)) return json(['total' => 0, 'rows' => []]);
-        $kw = input('post.kw', null, 'trim');
-        $type = input('post.type', null, 'trim');
-        $offset = input('post.offset/d', 0);
-        $limit = input('post.limit/d', 10);
-
-        $select = Db::name('domain')->alias('A')->join('account B', 'A.aid = B.id');
-        if (!empty($kw)) {
-            $select->whereLike('name|A.remark', '%' . $kw . '%');
-        }
-        if (!empty($type)) {
-            $select->whereLike('B.type', $type);
-        }
-        if (request()->user['level'] == 1) {
-            $select->where('is_hide', 0)->where('A.name', 'in', request()->user['permission']);
-        }
-        $total = $select->count();
-        $rows = $select->fieldRaw('A.*,B.type,B.remark aremark')->order('A.id', 'desc')->limit($offset, $limit)->select();
-
-        $list = [];
-        foreach ($rows as $row) {
-            $row['typename'] = DnsHelper::$dns_config[$row['type']]['name'];
-            $list[] = $row;
-        }
-
-        return json(['total' => $total, 'rows' => $list]);
-    }
-
-    public function domain_op()
-    {
-        if (!checkPermission(1)) return $this->alert('error', '无权限');
-        $act = input('param.act');
-        if ($act == 'get') {
-            $id = input('post.id/d');
-            $row = Db::name('domain')->where('id', $id)->find();
-            if (!$row) return json(['code' => -1, 'msg' => '域名不存在']);
-            return json(['code' => 0, 'data' => $row]);
-        } elseif ($act == 'add') {
-            if (!checkPermission(2)) return $this->alert('error', '无权限');
-            $aid = input('post.aid/d');
-            $name = input('post.name', null, 'trim');
-            $thirdid = input('post.thirdid', null, 'trim');
-            $recordcount = input('post.recordcount/d', 0);
-            if (empty($name) || empty($thirdid)) return json(['code' => -1, 'msg' => '参数不能为空']);
-            if (Db::name('domain')->where('aid', $aid)->where('name', $name)->find()) {
-                return json(['code' => -1, 'msg' => '域名已存在']);
-            }
-            Db::name('domain')->insert([
-                'aid' => $aid,
-                'name' => $name,
-                'thirdid' => $thirdid,
-                'addtime' => date('Y-m-d H:i:s'),
-                'is_hide' => 0,
-                'is_sso' => 1,
-                'recordcount' => $recordcount,
-            ]);
-            return json(['code' => 0, 'msg' => '添加域名成功！']);
-        } elseif ($act == 'edit') {
-            if (!checkPermission(2)) return $this->alert('error', '无权限');
-            $id = input('post.id/d');
-            $row = Db::name('domain')->where('id', $id)->find();
-            if (!$row) return json(['code' => -1, 'msg' => '域名不存在']);
-            $is_hide = input('post.is_hide/d');
-            $is_sso = input('post.is_sso/d');
-            $remark = input('post.remark', null, 'trim');
-            Db::name('domain')->where('id', $id)->update([
-                'is_hide' => $is_hide,
-                'is_sso' => $is_sso,
-                'remark' => $remark,
-            ]);
-            return json(['code' => 0, 'msg' => '修改域名配置成功！']);
-        } elseif ($act == 'del') {
-            if (!checkPermission(2)) return $this->alert('error', '无权限');
-            $id = input('post.id/d');
-            Db::name('domain')->where('id', $id)->delete();
-            Db::name('dmtask')->where('did', $id)->delete();
-            Db::name('optimizeip')->where('did', $id)->delete();
-            return json(['code' => 0]);
-        } elseif ($act == 'batchadd') {
-            if (!checkPermission(2)) return $this->alert('error', '无权限');
-            $aid = input('post.aid/d');
-            $domains = input('post.domains');
-            if (empty($domains)) return json(['code' => -1, 'msg' => '参数不能为空']);
-            $data = [];
-            foreach ($domains as $row) {
-                $data[] = [
-                    'aid' => $aid,
-                    'name' => $row['name'],
-                    'thirdid' => $row['id'],
-                    'addtime' => date('Y-m-d H:i:s'),
-                    'is_hide' => 0,
-                    'is_sso' => 1,
-                    'recordcount' => $row['recordcount'],
+        $action = input('param.action');
+        if ($this->request->isPost()) {
+            if ($action == 'add') {
+                $task = [
+                    'did' => input('post.did/d'),
+                    'rr' => input('post.rr', null, 'trim'),
+                    'recordid' => input('post.recordid', null, 'trim'),
+                    'type' => input('post.type/d'),
+                    'main_value' => input('post.main_value', null, 'trim'),
+                    'backup_value' => input('post.backup_value', null, 'trim'),
+                    'checktype' => input('post.checktype/d'),
+                    'checkurl' => input('post.checkurl', null, 'trim'),
+                    'tcpport' => !empty(input('post.tcpport')) ? input('post.tcpport/d') : null,
+                    'frequency' => input('post.frequency/d'),
+                    'cycle' => input('post.cycle/d'),
+                    'timeout' => input('post.timeout/d'),
+                    'proxy' => input('post.proxy/d'),
+                    'cdn' => input('post.cdn') == 'true' || input('post.cdn') == '1' ? 1 : 0,
+                    'remark' => input('post.remark', null, 'trim'),
+                    'recordinfo' => input('post.recordinfo', null, 'trim'),
+                    'addtime' => time(),
+                    'active' => 1
                 ];
+
+                if (empty($task['did']) || empty($task['rr']) || empty($task['recordid']) || empty($task['main_value']) || empty($task['frequency']) || empty($task['cycle'])) {
+                    return json(['code' => -1, 'msg' => '必填项不能为空']);
+                }
+                if ($task['checktype'] > 0 && $task['timeout'] > $task['frequency']) {
+                    return json(['code' => -1, 'msg' => '为保障容灾切换任务正常运行，最大超时时间不能大于检测间隔']);
+                }
+                if ($task['type'] == 2 && $task['backup_value'] == $task['main_value']) {
+                    return json(['code' => -1, 'msg' => '主备地址不能相同']);
+                }
+                if (Db::name('dmtask')->where('recordid', $task['recordid'])->find()) {
+                    return json(['code' => -1, 'msg' => '当前容灾切换策略已存在']);
+                }
+                Db::name('dmtask')->insert($task);
+                return json(['code' => 0, 'msg' => '添加成功']);
+            } elseif ($action == 'edit') {
+                $id = input('post.id/d');
+                $task = [
+                    'did' => input('post.did/d'),
+                    'rr' => input('post.rr', null, 'trim'),
+                    'recordid' => input('post.recordid', null, 'trim'),
+                    'type' => input('post.type/d'),
+                    'main_value' => input('post.main_value', null, 'trim'),
+                    'backup_value' => input('post.backup_value', null, 'trim'),
+                    'checktype' => input('post.checktype/d'),
+                    'checkurl' => input('post.checkurl', null, 'trim'),
+                    'tcpport' => !empty(input('post.tcpport')) ? input('post.tcpport/d') : null,
+                    'frequency' => input('post.frequency/d'),
+                    'cycle' => input('post.cycle/d'),
+                    'timeout' => input('post.timeout/d'),
+                    'proxy' => input('post.proxy/d'),
+                    'cdn' => input('post.cdn') == 'true' || input('post.cdn') == '1' ? 1 : 0,
+                    'remark' => input('post.remark', null, 'trim'),
+                    'recordinfo' => input('post.recordinfo', null, 'trim'),
+                ];
+
+                if (empty($task['did']) || empty($task['rr']) || empty($task['recordid']) || empty($task['main_value']) || empty($task['frequency']) || empty($task['cycle'])) {
+                    return json(['code' => -1, 'msg' => '必填项不能为空']);
+                }
+                if ($task['checktype'] > 0 && $task['timeout'] > $task['frequency']) {
+                    return json(['code' => -1, 'msg' => '为保障容灾切换任务正常运行，最大超时时间不能大于检测间隔']);
+                }
+                if ($task['type'] == 2 && $task['backup_value'] == $task['main_value']) {
+                    return json(['code' => -1, 'msg' => '主备地址不能相同']);
+                }
+                if (Db::name('dmtask')->where('recordid', $task['recordid'])->where('id', '<>', $id)->find()) {
+                    return json(['code' => -1, 'msg' => '当前容灾切换策略已存在']);
+                }
+                Db::name('dmtask')->where('id', $id)->update($task);
+                return json(['code' => 0, 'msg' => '修改成功']);
+            } elseif ($action == 'setactive') {
+                $id = input('post.id/d');
+                $active = input('post.active/d');
+                Db::name('dmtask')->where('id', $id)->update(['active' => $active]);
+                return json(['code' => 0, 'msg' => '设置成功']);
+            } elseif ($action == 'del') {
+                $id = input('post.id/d');
+                Db::name('dmtask')->where('id', $id)->delete();
+                Db::name('dmlog')->where('taskid', $id)->delete();
+                return json(['code' => 0, 'msg' => '删除成功']);
+            } else {
+                return json(['code' => -1, 'msg' => '参数错误']);
             }
-            Db::name('domain')->insertAll($data);
-            return json(['code' => 0, 'msg' => '成功添加' . count($data) . '个域名！']);
         }
-        return json(['code' => -3]);
+        $task = null;
+        if ($action == 'edit') {
+            $id = input('get.id/d');
+            $task = Db::name('dmtask')->where('id', $id)->find();
+            if (empty($task)) return $this->alert('error', '切换策略不存在');
+        }
+
+        $domains = [];
+        $domainList = Db::name('domain')->alias('A')->join('account B', 'A.aid = B.id')->field('A.id,A.name,B.type')->select();
+        foreach ($domainList as $row) {
+            $domains[] = ['id'=>$row['id'], 'name'=>$row['name'], 'type'=>$row['type']];
+        }
+        View::assign('domains', $domains);
+
+        View::assign('info', $task);
+        View::assign('action', $action);
+        View::assign('support_ping', function_exists('exec') ? '1' : '0');
+        return View::fetch();
     }
 
-    public function domain_list()
+    public function taskinfo()
     {
         if (!checkPermission(2)) return $this->alert('error', '无权限');
-        $aid = input('post.aid/d');
-        $kw = input('post.kw', null, 'trim');
-        $page = input('?post.page') ? input('post.page/d') : 1;
-        $pagesize = input('?post.pagesize') ? input('post.pagesize/d') : 10;
-        $dns = DnsHelper::getModel($aid);
-        $result = $dns->getDomainList($kw, $page, $pagesize);
-        if (!$result) return json(['code' => -1, 'msg' => '获取域名列表失败，' . $dns->getError()]);
-
-        foreach ($result['list'] as &$row) {
-            $row['disabled'] = Db::name('domain')->where('aid', $aid)->where('name', $row['Domain'])->find() != null;
-        }
-        return json(['code' => 0, 'data' => ['total' => $result['total'], 'list' => $result['list']]]);
-    }
-
-    //获取解析线路和最小TTL
-    private function get_line_and_ttl($drow)
-    {
-        $recordLine = cache('record_line_' . $drow['id']);
-        $minTTL = cache('min_ttl_' . $drow['id']);
-        if (empty($recordLine)) {
-            $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-            if (!$dns) throw new Exception('DNS模块不存在');
-            $recordLine = $dns->getRecordLine();
-            if (!$recordLine) throw new Exception('获取解析线路列表失败，' . $dns->getError());
-            cache('record_line_' . $drow['id'], $recordLine, 604800);
-            $minTTL = $dns->getMinTTL();
-            if ($minTTL) {
-                cache('min_ttl_' . $drow['id'], $minTTL, 604800);
-            }
-        }
-        return [$recordLine, $minTTL];
-    }
-
-    public function domain_info()
-    {
         $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return $this->alert('error', '域名不存在');
+        $task = Db::name('dmtask')->where('id'， $id)->find();
+        if (empty($task)) return $this->alert('error'， '切换策略不存在');
+
+        $switch_count = Db::name('dmlog')->where('taskid'， $id)->where('date'， '>='， date("Y-m-d H:i:s"， strtotime("-1 天之前")))->count();
+        $fail_count = Db::name('dmlog')->where('taskid'， $id)->where('date'， '>='， date("Y-m-d H:i:s"， strtotime("-1 天之前")))->where('action'， 1)->count();
+
+        $task['switch_count'] = $switch_count;
+        $task['fail_count'] = $fail_count;
+        if ($task['type'] == 3) {
+            $task['action_name'] = ['未知'， '<font color="red">开启解析</font>'， '<font color="green">暂停解析</font>'];
+        } elseif ($task['type'] == 2) {
+            $task['action_name'] = ['未知'， '<font color="red">切换备用解析记录</font>'， '<font color="green">恢复主解析记录</font>'];
+        } else {
+            $task['action_name'] = ['未知'， '<font color="red">暂停解析</font>'， '<font color="green">启用解析</font>'];
         }
-        $dnstype = Db::name('account')->where('id', $drow['aid'])->value('type');
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        list($recordLine, $minTTL) = $this->get_line_and_ttl($drow);
-
-        $recordLineArr = [];
-        foreach ($recordLine as $key => $item) {
-            $recordLineArr[] = ['id' => strval($key), 'name' => $item['name'], 'parent' => $item['parent']];
-        }
-
-        $dnsconfig = DnsHelper::$dns_config[$dnstype];
-        $dnsconfig['type'] = $dnstype;
-
-        $drow['config'] = $dnsconfig;
-        $drow['recordLine'] = $recordLineArr;
-        $drow['minTTL'] = $minTTL ? $minTTL : 1;
-        if (input('?post.loginurl') && input('post.loginurl') == '1') {
-            $token = getSid();
-            cache('quicklogin_' . $drow['name'], $token, 3600);
-            $timestamp = time();
-            $sign = md5(config_get('sys_key') . $drow['name'] . $timestamp . $token . config_get('sys_key'));
-            $drow['loginurl'] = request()->root(true) . '/quicklogin?domain=' . $drow['name'] . '&timestamp=' . $timestamp . '&token=' . $token . '&sign=' . $sign;
-        }
-
-        return json(['code' => 0, 'data' => $drow]);
+        View::assign('info'， $task);
+        return View::fetch();
     }
 
-    public function record()
+    公共 function tasklog_data()
     {
-        $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return $this->alert('error', '域名不存在');
-        }
-        $dnstype = Db::name('account')->where('id', $drow['aid'])->value('type');
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        list($recordLine, $minTTL) = $this->get_line_and_ttl($drow);
-
-        $recordLineArr = [];
-        foreach ($recordLine as $key => $item) {
-            $recordLineArr[] = ['id' => strval($key), 'name' => $item['name'], 'parent' => $item['parent']];
-        }
-
-        $dnsconfig = DnsHelper::$dns_config[$dnstype];
-        $dnsconfig['type'] = $dnstype;
-
-        View::assign('domainId', $id);
-        View::assign('domainName', $drow['name']);
-        View::assign('recordLine', $recordLineArr);
-        View::assign('minTTL', $minTTL ? $minTTL : 1);
-        View::assign('dnsconfig', $dnsconfig);
-        return view();
-    }
-
-    public function record_data()
-    {
-        $id = input('param.id/d');
-        $keyword = input('post.keyword', null, 'trim');
-        $subdomain = input('post.subdomain', null, 'trim');
-        $value = input('post.value', null, 'trim');
-        $type = input('post.type', null, 'trim');
-        $line = input('post.line', null, 'trim');
-        $status = input('post.status', null, 'trim');
+        if (!checkPermission(2)) return json(['total' => 0， 'rows' => []]);
+        $taskid = input('param.id/d');
         $offset = input('post.offset/d');
         $limit = input('post.limit/d');
-        if ($limit == 0) {
-            $page = 1;
-        } else {
-            $page = $offset / $limit + 1;
+        $action = input('post.action/d'， 0);
+
+        $select = Db::name('dmlog')->where('taskid'， $taskid);
+        if ($action > 0) {
+            $select->where('action'， $action);
         }
+        $total = $select->count();
+        $list = $select->order('id'， 'desc')->limit($offset， $limit)->select();
 
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return json(['total' => 0, 'rows' => []]);
-        }
-        if (!checkPermission(0, $drow['name'])) return json(['total' => 0, 'rows' => []]);
-
-        $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-        $domainRecords = $dns->getDomainRecords($page, $limit, $keyword, $subdomain, $value, $type, $line, $status);
-        if (!$domainRecords) return json(['total' => 0, 'rows' => []]);
-
-        if (empty($keyword) && empty($subdomain) && empty($type) && isNullOrEmpty($line) && empty($status) && empty($value) && $domainRecords['total'] != $drow['recordcount']) {
-            Db::name('domain')->where('id', $id)->update(['recordcount' => $domainRecords['total']]);
-        }
-
-        $recordLine = cache('record_line_' . $id);
-
-        foreach ($domainRecords['list'] as &$row) {
-            $row['LineName'] = isset($recordLine[$row['Line']]) ? $recordLine[$row['Line']]['name'] : $row['Line'];
-        }
-
-        $dnstype = Db::name('account')->where('id', $drow['aid'])->value('type');
-        if ($dnstype == 'baidu' || $dnstype == 'namesilo') {
-            return json($domainRecords['list']);
-        }
-
-        return json(['total' => $domainRecords['total'], 'rows' => $domainRecords['list']]);
+        return json(['total' => $total， 'rows' => $list]);
     }
 
-    public function record_list()
+    公共 function noticeset()
     {
-        if (!checkPermission(2)) return $this->alert('error', '无权限');
-        $id = input('post.id/d');
-        $rr = input('post.rr', null, 'trim');
-
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return json(['code' => -1, 'msg' => '域名不存在']);
-        }
-        if (!checkPermission(0, $drow['name'])) return json(['code' => -1, 'msg' => '无权限']);
-
-        $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-        $domainRecords = $dns->getSubDomainRecords($rr, 1, 100);
-        if (!$domainRecords) return json(['code' => -1, 'msg' => '获取记录列表失败，' . $dns->getError()]);
-
-        list($recordLine, $minTTL) = $this->get_line_and_ttl($drow);
-
-        foreach ($domainRecords['list'] as &$row) {
-            $row['LineName'] = isset($recordLine[$row['Line']]) ? $recordLine[$row['Line']]['name'] : $row['Line'];
-        }
-
-        return json(['code' => 0, 'data' => $domainRecords['list']]);
-    }
-
-    public function record_add()
-    {
-        $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return json(['code' => -1, 'msg' => '域名不存在']);
-        }
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        $name = input('post.name', null, 'trim');
-        $type = input('post.type', null, 'trim');
-        $value = input('post.value', null, 'trim');
-        $line = input('post.line', null, 'trim');
-        $ttl = input('post.ttl/d', 600);
-        $weight = input('post.weight/d', 0);
-        $mx = input('post.mx/d', 1);
-        $remark = input('post.remark', null, 'trim');
-
-        if (empty($name) || empty($type) || empty($value)) {
-            return json(['code' => -1, 'msg' => '参数不能为空']);
-        }
-
-        $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-        $recordid = $dns->addDomainRecord($name, $type, $value, $line, $ttl, $mx, $weight, $remark);
-        if ($recordid) {
-            $this->add_log($drow['name'], '添加解析', $type . '记录 ' . $name . ' ' . $value . ' (线路:' . $line . ' TTL:' . $ttl . ')');
-            return json(['code' => 0, 'msg' => '添加解析记录成功！']);
-        } else {
-            return json(['code' => -1, 'msg' => '添加解析记录失败，' . $dns->getError()]);
-        }
-    }
-
-    public function record_update()
-    {
-        $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return json(['code' => -1, 'msg' => '域名不存在']);
-        }
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        $recordid = input('post.recordid', null, 'trim');
-        $name = input('post.name', null, 'trim');
-        $type = input('post.type', null, 'trim');
-        $value = input('post.value', null, 'trim');
-        $line = input('post.line', null, 'trim');
-        $ttl = input('post.ttl/d', 600);
-        $weight = input('post.weight/d', 0);
-        $mx = input('post.mx/d', 1);
-        $remark = input('post.remark', null, 'trim');
-
-        if (empty($recordid) || empty($name) || empty($type) || empty($value)) {
-            return json(['code' => -1, 'msg' => '参数不能为空']);
-        }
-
-        $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-        $recordid = $dns->updateDomainRecord($recordid, $name, $type, $value, $line, $ttl, $mx, $weight, $remark);
-        if ($recordid) {
-            $this->add_log($drow['name'], '修改解析', $type . '记录 ' . $name . ' ' . $value . ' (线路:' . $line . ' TTL:' . $ttl . ')');
-            return json(['code' => 0, 'msg' => '修改解析记录成功！']);
-        } else {
-            return json(['code' => -1, 'msg' => '修改解析记录失败，' . $dns->getError()]);
-        }
-    }
-
-    public function record_delete()
-    {
-        $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return json(['code' => -1, 'msg' => '域名不存在']);
-        }
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        $recordid = input('post.recordid', null, 'trim');
-
-        if (empty($recordid)) {
-            return json(['code' => -1, 'msg' => '参数不能为空']);
-        }
-
-        $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-        if ($dns->deleteDomainRecord($recordid)) {
-            $this->add_log($drow['name'], '删除解析', '记录ID:' . $recordid);
-            return json(['code' => 0, 'msg' => '删除解析记录成功！']);
-        } else {
-            return json(['code' => -1, 'msg' => '删除解析记录失败，' . $dns->getError()]);
-        }
-    }
-
-    public function record_status()
-    {
-        $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return json(['code' => -1, 'msg' => '域名不存在']);
-        }
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        $recordid = input('post.recordid', null, 'trim');
-        $status = input('post.status', null, 'trim');
-
-        if (empty($recordid)) {
-            return json(['code' => -1, 'msg' => '参数不能为空']);
-        }
-
-        $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-        if ($dns->setDomainRecordStatus($recordid, $status)) {
-            $action = $status == '1' ? '启用解析' : '暂停解析';
-            $this->add_log($drow['name'], $action, '记录ID:' . $recordid);
-            return json(['code' => 0, 'msg' => '操作成功！']);
-        } else {
-            return json(['code' => -1, 'msg' => '操作失败，' . $dns->getError()]);
-        }
-    }
-
-    public function record_remark()
-    {
-        $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return json(['code' => -1, 'msg' => '域名不存在']);
-        }
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        $recordid = input('post.recordid', null, 'trim');
-        $remark = input('post.remark', null, 'trim');
-
-        if (empty($recordid)) {
-            return json(['code' => -1, 'msg' => '参数不能为空']);
-        }
-        if (empty($remark)) $remark = null;
-
-        $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-        if ($dns->updateDomainRecordRemark($recordid, $remark)) {
-            return json(['code' => 0, 'msg' => '操作成功！']);
-        } else {
-            return json(['code' => -1, 'msg' => '操作失败，' . $dns->getError()]);
-        }
-    }
-
-    public function record_batch()
-    {
-        $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return json(['code' => -1, 'msg' => '域名不存在']);
-        }
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        $recordids = input('post.recordids', null, 'trim');
-        $action = input('post.action', null, 'trim');
-
-        if (empty($recordids) || empty($action)) {
-            return json(['code' => -1, 'msg' => '参数不能为空']);
-        }
-
-        $success = 0;
-        $fail = 0;
-        $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-        if ($action == 'open') {
-            foreach ($recordids as $recordid) {
-                if ($dns->setDomainRecordStatus($recordid, '1')) {
-                    $this->add_log($drow['name'], '启用解析', '记录ID:' . $recordid);
-                    $success++;
-                }
+        if (!checkPermission(2)) return $this->alert('error'， '无权限');
+        $params = input('post.');
+        foreach ($params as $key => $value) {
+            if (empty($key)) {
+                continue;
             }
-            $msg = '成功启用' . $success . '条解析记录';
-        } else if ($action == 'pause') {
-            foreach ($recordids as $recordid) {
-                if ($dns->setDomainRecordStatus($recordid, '0')) {
-                    $this->add_log($drow['name'], '暂停解析', '记录ID:' . $recordid);
-                    $success++;
-                }
-            }
-            $msg = '成功暂停' . $success . '条解析记录';
-        } else if ($action == 'delete') {
-            foreach ($recordids as $recordid) {
-                if ($dns->deleteDomainRecord($recordid)) {
-                    $this->add_log($drow['name'], '删除解析', '记录ID:' . $recordid);
-                    $success++;
-                }
-            }
-            $msg = '成功删除' . $success . '条解析记录';
-        } else if ($action == 'remark') {
-            $remark = input('post.remark', null, 'trim');
-            if (empty($remark)) $remark = null;
-            foreach ($recordids as $recordid) {
-                if ($dns->updateDomainRecordRemark($recordid, $remark)) {
-                    $success++;
-                } else {
-                    $fail++;
-                }
-            }
-            $msg = '批量修改备注，成功' . $success . '条，失败' . $fail . '条';
+            config_set($key， $value);
+            Cache::delete('configs');
         }
-        return json(['code' => 0, 'msg' => $msg]);
+        return json(['code' => 0， 'msg' => 'succ']);
     }
 
-    public function record_batch_edit()
+    公共 function clean()
     {
-        $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return json(['code' => -1, 'msg' => '域名不存在']);
-        }
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        $action = input('post.action', null, 'trim');
-        $recordinfo = input('post.recordinfo', null, 'trim');
-        $recordinfo = json_decode($recordinfo, true);
-
-        if ($action == 'value') {
-            $type = input('post.type', null, 'trim');
-            $value = input('post.value', null, 'trim');
-
-            if (empty($recordinfo) || empty($type) || empty($value)) {
-                return json(['code' => -1, 'msg' => '参数不能为空']);
-            }
-
-            $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-
-            $success = 0;
-            $fail = 0;
-            foreach ($recordinfo as $record) {
-                $recordid = $dns->updateDomainRecord($record['recordid'], $record['name'], $type, $value, $record['line'], $record['ttl'], $record['mx'], $record['weight'], $record['remark']);
-                if ($recordid) {
-                    $this->add_log($drow['name'], '修改解析', $type . '记录 ' . $record['name'] . ' ' . $value . ' (线路:' . $record['line'] . ' TTL:' . $record['ttl'] . ')');
-                    $success++;
-                } else {
-                    $fail++;
-                }
-            }
-            return json(['code' => 0, 'msg' => '批量修改解析记录，成功' . $success . '条，失败' . $fail . '条']);
-        } else if ($action == 'line') {
-            $line = input('post.line', null, 'trim');
-
-            if (empty($recordinfo) || isNullOrEmpty($line)) {
-                return json(['code' => -1, 'msg' => '参数不能为空']);
-            }
-
-            $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-
-            $success = 0;
-            $fail = 0;
-            foreach ($recordinfo as $record) {
-                $recordid = $dns->updateDomainRecord($record['recordid'], $record['name'], $record['type'], $record['value'], $line, $record['ttl'], $record['mx'], $record['weight'], $record['remark']);
-                if ($recordid) {
-                    $this->add_log($drow['name'], '修改解析', $record['type'] . '记录 ' . $record['name'] . ' ' . $record['value'] . ' (线路:' . $line . ' TTL:' . $record['ttl'] . ')');
-                    $success++;
-                } else {
-                    $fail++;
-                }
-            }
-            return json(['code' => 0, 'msg' => '批量修改解析线路，成功' . $success . '条，失败' . $fail . '条']);
+        if (!checkPermission(2)) return $this->alert('error'， '无权限');
+        if ($this->request->isPost()) {
+            $days = input('post.days/d');
+            if (!$days || $days < 0) return json(['code' => -1， 'msg' => '参数错误']);
+            Db::execute("DELETE FROM `" 。 config('database.connections.mysql.prefix') 。 "dmlog` WHERE `date`<'" 。 date("Y-m-d H:i:s"， strtotime("-" 。 $days 。 " days")) 。 "'");
+            Db::execute("OPTIMIZE TABLE `" 。 config('database。connections。mysql。prefix') 。 "dmlog`");
+            return json(['code' => 0， 'msg' => '清理成功']);
         }
     }
 
-    public function record_batch_add()
+    公共 function status()
     {
-        $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return $this->alert('error', '域名不存在');
-        }
-        $dnstype = Db::name('account')->where('id', $drow['aid'])->value('type');
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        if (request()->isAjax()) {
-            $record = input('post.record', null, 'trim');
-            $type = input('post.type', null, 'trim');
-            $line = input('post.line', null, 'trim');
-            $ttl = input('post.ttl/d', 600);
-            $mx = input('post.mx/d', 1);
-            $recordlist = explode("\n", $record);
-
-            if (empty($record) || empty($recordlist)) {
-                return json(['code' => -1, 'msg' => '参数不能为空']);
-            }
-
-            $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-
-            $success = 0;
-            $fail = 0;
-            foreach ($recordlist as $record) {
-                $record = trim($record);
-                $arr = explode(' ', $record);
-                if (empty($record) || empty($arr[0]) || empty($arr[1])) continue;
-                $thistype = empty($type) ? getDnsType($arr[1]) : $type;
-                $recordid = $dns->addDomainRecord($arr[0], $thistype, $arr[1], $line, $ttl, $mx);
-                if ($recordid) {
-                    $this->add_log($drow['name'], '添加解析', $thistype . '记录 ' . $arr[0] . ' ' . $arr[1] . ' (线路:' . $line . ' TTL:' . $ttl . ')');
-                    $success++;
-                } else {
-                    $fail++;
-                }
-            }
-            return json(['code' => 0, 'msg' => '批量添加解析，成功' . $success . '条，失败' . $fail . '条']);
-        }
-
-        list($recordLine, $minTTL) = $this->get_line_and_ttl($drow);
-
-        $recordLineArr = [];
-        foreach ($recordLine as $key => $item) {
-            $recordLineArr[] = ['id' => strval($key), 'name' => $item['name'], 'parent' => $item['parent']];
-        }
-
-        $dnsconfig = DnsHelper::$dns_config[$dnstype];
-        $dnsconfig['type'] = $dnstype;
-
-        View::assign('domainId', $id);
-        View::assign('domainName', $drow['name']);
-        View::assign('recordLine', $recordLineArr);
-        View::assign('minTTL', $minTTL ? $minTTL : 1);
-        View::assign('dnsconfig', $dnsconfig);
-        return view('batchadd');
-    }
-
-    public function record_log()
-    {
-        $id = input('param.id/d');
-        $drow = Db::name('domain')->where('id', $id)->find();
-        if (!$drow) {
-            return $this->alert('error', '域名不存在');
-        }
-        if (!checkPermission(0, $drow['name'])) return $this->alert('error', '无权限');
-
-        if (request()->isPost()) {
-            $offset = input('post.offset/d');
-            $limit = input('post.limit/d');
-            $page = $offset / $limit + 1;
-            $dns = DnsHelper::getModel($drow['aid'], $drow['name'], $drow['thirdid']);
-            $domainRecords = $dns->getDomainRecordLog($page, $limit);
-            if (!$domainRecords) return json(['total' => 0, 'rows' => []]);
-            return json(['total' => $domainRecords['total'], 'rows' => $domainRecords['list']]);
-        }
-
-        View::assign('domainId', $id);
-        View::assign('domainName', $drow['name']);
-        return view('log');
-    }
-
-    private function add_log($domain, $action, $data)
-    {
-        Db::name('log')->insert(['uid' => request()->user['id'], 'domain' => $domain, 'action' => $action, 'data' => $data, 'addtime' => date("Y-m-d H:i:s")]);
+        $run_time = config_get('run_time'， null， true);
+        $run_state = $run_time ? (time() - strtotime($run_time) > 10 ? 0 : 1) : 0;
+        return $run_state == 1 ? 'ok' : 'error';
     }
 }
