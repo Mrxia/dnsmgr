@@ -52,7 +52,7 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:v2.4
           no-cache: true  # 彻底禁用构建缓存[5]
           secrets: |
             "dockerhub_username=${{ secrets.DOCKERHUB_USERNAME }}"
