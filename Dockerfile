@@ -7,13 +7,13 @@ RUN apk add --no-cache bash curl nginx php82 php82-ctype php82-curl php82-dom ph
 
 RUN rm -rf /var/cache/apk/* /tmp/*
 
-COPY conf/nginx.conf /etc/nginx/nginx.conf
+COPY configs/config/nginx.conf /etc/nginx/nginx.conf
 
 ENV PHP_INI_DIR=/etc/php82
 
-COPY conf/fpm-pool.conf /etc/php82/php-fpm.d/www.conf
-COPY conf/php.ini /etc/php82/conf.d/custom.ini
-COPY conf/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY configs/config/fpm-pool.conf /etc/php82/php-fpm.d/www.conf
+COPY configs/config/php.ini /etc/php82/conf.d/custom.ini
+COPY configs/config/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 RUN mkdir -p /usr/src && wget --no-cache https://github.com/netcccyun/dnsmgr/archive/refs/heads/main.zip -O /usr/src/www.zip && unzip /usr/src/www.zip -d /usr/src/ && mv /usr/src/dnsmgr-main /usr/src/www && rm -f /usr/src/www.zip
 
@@ -24,14 +24,14 @@ RUN composer install -d /usr/src/www --no-interaction --no-dev --optimize-autolo
 RUN adduser -D -s /sbin/nologin -g www www && chown -R www.www /usr/src/www /var/lib/nginx /var/log/nginx
 
 RUN echo "*/15 * * * * cd /app/www && php think opiptask" | crontab -u www -
+
 RUN echo "* * * * * cd /app/www && php think certtask" | crontab -u www -
 
-
-COPY config/run_tasks.sh /app/run_tasks.sh
+COPY configs/config/run_tasks.sh /app/run_tasks.sh
 
 RUN chmod +x /app/run_tasks.sh
 
-COPY entrypoint.sh /entrypoint.sh
+COPY configs/config/entrypoint.sh /entrypoint.sh
 
 ENTRYPOINT ["sh"， "/entrypoint.sh"]
 
