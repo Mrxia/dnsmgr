@@ -87,6 +87,7 @@ class Dmonitor extends BaseController
                     'cycle' => input('post.cycle/d'),
                     'timeout' => input('post.timeout/d'),
                     'proxy' => input('post.proxy/d'),
+                    'cdn' => input('post.cdn') == 'true' || input('post.cdn') == '1' ? 1 : 0,
                     'remark' => input('post.remark', null, 'trim'),
                     'recordinfo' => input('post.recordinfo', null, 'trim'),
                     'addtime' => time(),
@@ -123,6 +124,7 @@ class Dmonitor extends BaseController
                     'cycle' => input('post.cycle/d'),
                     'timeout' => input('post.timeout/d'),
                     'proxy' => input('post.proxy/d'),
+                    'cdn' => input('post.cdn') == 'true' || input('post.cdn') == '1' ? 1 : 0,
                     'remark' => input('post.remark', null, 'trim'),
                     'recordinfo' => input('post.recordinfo', null, 'trim'),
                 ];
@@ -163,8 +165,9 @@ class Dmonitor extends BaseController
         }
 
         $domains = [];
-        foreach (Db::name('domain')->select() as $row) {
-            $domains[$row['id']] = $row['name'];
+        $domainList = Db::name('domain')->alias('A')->join('account B', 'A.aid = B.id')->field('A.id,A.name,B.type')->select();
+        foreach ($domainList as $row) {
+            $domains[] = ['id'=>$row['id'], 'name'=>$row['name'], 'type'=>$row['type']];
         }
         View::assign('domains', $domains);
 
@@ -178,72 +181,72 @@ class Dmonitor extends BaseController
     {
         if (!checkPermission(2)) return $this->alert('error', '无权限');
         $id = input('param.id/d');
-        $task = Db::name('dmtask')->where('id', $id)->find();
-        if (empty($task)) return $this->alert('error', '切换策略不存在');
+        $task = Db::name('dmtask')->where('id'， $id)->find();
+        if (empty($task)) return $this->alert('error'， '切换策略不存在');
 
-        $switch_count = Db::name('dmlog')->where('taskid', $id)->where('date', '>=', date("Y-m-d H:i:s", strtotime("-1 days")))->count();
-        $fail_count = Db::name('dmlog')->where('taskid', $id)->where('date', '>=', date("Y-m-d H:i:s", strtotime("-1 days")))->where('action', 1)->count();
+        $switch_count = Db::name('dmlog')->where('taskid'， $id)->where('date'， '>='， date("Y-m-d H:i:s"， strtotime("-1 天之前")))->count();
+        $fail_count = Db::name('dmlog')->where('taskid'， $id)->where('date'， '>='， date("Y-m-d H:i:s"， strtotime("-1 天之前")))->where('action'， 1)->count();
 
         $task['switch_count'] = $switch_count;
         $task['fail_count'] = $fail_count;
         if ($task['type'] == 3) {
-            $task['action_name'] = ['未知', '<font color="red">开启解析</font>', '<font color="green">暂停解析</font>'];
+            $task['action_name'] = ['未知'， '<font color="red">开启解析</font>'， '<font color="green">暂停解析</font>'];
         } elseif ($task['type'] == 2) {
-            $task['action_name'] = ['未知', '<font color="red">切换备用解析记录</font>', '<font color="green">恢复主解析记录</font>'];
+            $task['action_name'] = ['未知'， '<font color="red">切换备用解析记录</font>'， '<font color="green">恢复主解析记录</font>'];
         } else {
-            $task['action_name'] = ['未知', '<font color="red">暂停解析</font>', '<font color="green">启用解析</font>'];
+            $task['action_name'] = ['未知'， '<font color="red">暂停解析</font>'， '<font color="green">启用解析</font>'];
         }
-        View::assign('info', $task);
+        View::assign('info'， $task);
         return View::fetch();
     }
 
-    public function tasklog_data()
+    公共 function tasklog_data()
     {
-        if (!checkPermission(2)) return json(['total' => 0, 'rows' => []]);
+        if (!checkPermission(2)) return json(['total' => 0， 'rows' => []]);
         $taskid = input('param.id/d');
         $offset = input('post.offset/d');
         $limit = input('post.limit/d');
-        $action = input('post.action/d', 0);
+        $action = input('post.action/d'， 0);
 
-        $select = Db::name('dmlog')->where('taskid', $taskid);
+        $select = Db::name('dmlog')->where('taskid'， $taskid);
         if ($action > 0) {
-            $select->where('action', $action);
+            $select->where('action'， $action);
         }
         $total = $select->count();
-        $list = $select->order('id', 'desc')->limit($offset, $limit)->select();
+        $list = $select->order('id'， 'desc')->limit($offset， $limit)->select();
 
-        return json(['total' => $total, 'rows' => $list]);
+        return json(['total' => $total， 'rows' => $list]);
     }
 
-    public function noticeset()
+    公共 function noticeset()
     {
-        if (!checkPermission(2)) return $this->alert('error', '无权限');
+        if (!checkPermission(2)) return $this->alert('error'， '无权限');
         $params = input('post.');
         foreach ($params as $key => $value) {
             if (empty($key)) {
                 continue;
             }
-            config_set($key, $value);
+            config_set($key， $value);
             Cache::delete('configs');
         }
-        return json(['code' => 0, 'msg' => 'succ']);
+        return json(['code' => 0， 'msg' => 'succ']);
     }
 
-    public function clean()
+    公共 function clean()
     {
-        if (!checkPermission(2)) return $this->alert('error', '无权限');
+        if (!checkPermission(2)) return $this->alert('error'， '无权限');
         if ($this->request->isPost()) {
             $days = input('post.days/d');
-            if (!$days || $days < 0) return json(['code' => -1, 'msg' => '参数错误']);
-            Db::execute("DELETE FROM `" . config('database.connections.mysql.prefix') . "dmlog` WHERE `date`<'" . date("Y-m-d H:i:s", strtotime("-" . $days . " days")) . "'");
-            Db::execute("OPTIMIZE TABLE `" . config('database.connections.mysql.prefix') . "dmlog`");
-            return json(['code' => 0, 'msg' => '清理成功']);
+            if (!$days || $days < 0) return json(['code' => -1， 'msg' => '参数错误']);
+            Db::execute("DELETE FROM `" 。 config('database.connections.mysql.prefix') 。 "dmlog` WHERE `date`<'" 。 date("Y-m-d H:i:s"， strtotime("-" 。 $days 。 " days")) 。 "'");
+            Db::execute("OPTIMIZE TABLE `" 。 config('database。connections。mysql。prefix') 。 "dmlog`");
+            return json(['code' => 0， 'msg' => '清理成功']);
         }
     }
 
-    public function status()
+    公共 function status()
     {
-        $run_time = config_get('run_time', null, true);
+        $run_time = config_get('run_time'， null， true);
         $run_state = $run_time ? (time() - strtotime($run_time) > 10 ? 0 : 1) : 0;
         return $run_state == 1 ? 'ok' : 'error';
     }
