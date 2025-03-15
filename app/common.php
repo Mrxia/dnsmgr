@@ -403,13 +403,13 @@ function curl_client($url, $data = null, $referer = null, $cookie = null, $heade
         curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
     }
     if ($cookie) {
-        curl_setopt($ch, CURLOPT_COOKIE, $cookie);
+        curl_setopt($ch， CURLOPT_COOKIE， $cookie);
     }
     if ($referer) {
-        curl_setopt($ch, CURLOPT_REFERER, $referer);
+        curl_setopt($ch， CURLOPT_REFERER， $referer);
     }
     if ($method) {
-        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+        curl_setopt($ch， CURLOPT_CUSTOMREQUEST， $method);
     }
 
     if ($proxy) {
@@ -420,22 +420,22 @@ function curl_client($url, $data = null, $referer = null, $cookie = null, $heade
     $errno = curl_errno($ch);
     if ($errno) {
         curl_close($ch);
-        throw new Exception('Curl error: ' . curl_error($ch));
+        throw new Exception('Curl error: ' 。 curl_error($ch));
     }
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-    $redirect_url = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+    $httpCode = curl_getinfo($ch， CURLINFO_HTTP_CODE);
+    $headerSize = curl_getinfo($ch， CURLINFO_HEADER_SIZE);
+    $redirect_url = curl_getinfo($ch， CURLINFO_REDIRECT_URL);
     curl_close($ch);
-    $header = substr($ret, 0, $headerSize);
-    $body = substr($ret, $headerSize);
-    return ['code' => $httpCode, 'redirect_url' => $redirect_url, 'header' => $header, 'body' => $body];
+    $header = substr($ret， 0， $headerSize);
+    $body = substr($ret， $headerSize);
+    return ['code' => $httpCode， 'redirect_url' => $redirect_url， 'header' => $header， 'body' => $body];
 }
 
 function curl_set_proxy(&$ch)
 {
     $proxy_server = config_get('proxy_server');
     $proxy_port = intval(config_get('proxy_port'));
-    $proxy_userpwd = config_get('proxy_user') . ':' . config_get('proxy_pwd');
+    $proxy_userpwd = config_get('proxy_user') 。 ':' 。 config_get('proxy_pwd');
     $proxy_type = config_get('proxy_type');
     if (empty($proxy_server) || empty($proxy_port)) {
         return;
@@ -449,11 +449,26 @@ function curl_set_proxy(&$ch)
     } else {
         $proxy_type = CURLPROXY_HTTP;
     }
-    curl_setopt($ch, CURLOPT_PROXYAUTH, CURLAUTH_BASIC);
-    curl_setopt($ch, CURLOPT_PROXY, $proxy_server);
-    curl_setopt($ch, CURLOPT_PROXYPORT, $proxy_port);
+    curl_setopt($ch， CURLOPT_PROXYAUTH， CURLAUTH_BASIC);
+    curl_setopt($ch， CURLOPT_PROXY， $proxy_server);
+    curl_setopt($ch， CURLOPT_PROXYPORT， $proxy_port);
     if ($proxy_userpwd != ':') {
-        curl_setopt($ch, CURLOPT_PROXYUSERPWD, $proxy_userpwd);
+        curl_setopt($ch， CURLOPT_PROXYUSERPWD， $proxy_userpwd);
     }
-    curl_setopt($ch, CURLOPT_PROXYTYPE, $proxy_type);
+    curl_setopt($ch， CURLOPT_PROXYTYPE， $proxy_type);
+}
+
+function convertDomainToAscii($domain) {
+    if (preg_match('/[\x{4e00}-\x{9fa5}]/u'， $domain)) {
+        return idn_to_ascii($domain);
+    } else {
+        return $domain;
+    }
+}
+function convertDomainToUtf8($domain) {
+    if (preg_match('/^xn--/'， $domain)) {
+        return idn_to_utf8($domain);
+    } else {
+        return $domain;
+    }
 }
