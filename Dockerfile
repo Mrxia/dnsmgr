@@ -33,7 +33,7 @@ RUN chmod +x /app/run_tasks.sh
 
 COPY configs/config/entrypoint.sh /entrypoint.sh
 
-ENTRYPOINT ["sh" "/entrypoint.sh"]
+ENTRYPOINT /entrypoint.sh
 
 EXPOSE 80/tcp
 
