@@ -33,10 +33,10 @@ RUN chmod +x /app/run_tasks.sh
 
 COPY configs/config/entrypoint.sh /entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["sh" "/entrypoint.sh"]
 
 EXPOSE 80/tcp
 
-CMD ["/bin/sh" "-c" "/usr/sbin/crond && /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf"]
+CMD /usr/sbin/crond && /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
 
 HEALTHCHECK CMD curl --silent --fail http://127.0.0.1/fpm-ping || exit 1
